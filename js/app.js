@@ -1,6 +1,6 @@
 // 画面の 動き。台本と 設定は localStorage、作った 音は IndexedDB に 置く（再読み込みしても 残る）。
-import * as core from "./core.js?v=3";
-import { VOICES } from "./voices.js?v=3";
+import * as core from "./core.js?v=4";
+import { VOICES } from "./voices.js?v=4";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY_STORE = "gvt.apiKey";
@@ -52,7 +52,7 @@ function lsDel(key) {
   }
 }
 
-const emptyProject = () => ({ settings: { ...DEFAULT_SETTINGS }, request: "", manuscript: "", characters: [], rows: [], notes: [] });
+const emptyProject = () => ({ settings: { ...DEFAULT_SETTINGS }, request: "", manuscript: "", pauseInstruction: "", characters: [], rows: [], notes: [] });
 
 function loadProject() {
   try {
@@ -352,6 +352,7 @@ function renderAll() {
   $("#tempo").value = state.settings.tempo;
   $("#tempo-out").textContent = Number(state.settings.tempo).toFixed(2);
   $("#gap").value = state.settings.gap;
+  $("#pause-instruction").value = state.pauseInstruction ?? "";
   renderKeyBadge();
   renderNotes();
   renderCharacters();
@@ -408,20 +409,58 @@ async function onMakeScript() {
       request: state.request,
       manuscript: state.manuscript,
       voices: VOICES,
+      gap: state.settings.gap,
     });
     await clipClear();
     state.characters = result.characters;
     state.notes = result.notes;
-    state.rows = result.lines.map((line) => ({ id: newId(), speaker: line.speaker, say: line.say, text: line.text, gapAfter: null, clip: null, error: "" }));
+    state.rows = result.lines.map((line) => ({ id: newId(), speaker: line.speaker, say: line.say, text: line.text, gapAfter: line.pauseAfter ?? null, clip: null, error: "" }));
     saveProject();
     renderAll();
-    status.textContent = `${state.rows.length}文・話し手${state.characters.length}人の台本ができました。声を確かめてから「出力する」を押してください。`;
+    const pauses = state.rows.filter((r) => r.gapAfter !== null).length;
+    status.textContent =
+      `${state.rows.length}文・話し手${state.characters.length}人の台本ができました` +
+      (pauses ? `（後の間を${pauses}か所で調整）` : "") +
+      "。声を確かめてから「出力する」を押してください。";
     $("#step-voices").scrollIntoView({ behavior: "smooth" });
   } catch (error) {
     status.classList.add("bad");
     status.textContent = `台本を作れませんでした: ${error.message}`;
   } finally {
     $("#make-script").disabled = running;
+  }
+}
+
+/** 今の 台本の 後の間だけを AI に 決めて もらう（文と 作った 音は そのまま）。 */
+async function onSuggestPauses() {
+  if (!state.rows.length) return toast("先に台本を作ってください");
+  const apiKey = requireKey();
+  if (!apiKey) return;
+  state.pauseInstruction = $("#pause-instruction").value;
+  const status = $("#pause-status");
+  const button = $("#suggest-pauses");
+  status.classList.remove("bad");
+  status.textContent = `後の間を決めています（${state.settings.textModel}）…`;
+  button.disabled = true;
+  try {
+    const { gaps, notes } = await core.suggestPauses(apiKey, state.settings.textModel, {
+      request: state.request,
+      instruction: state.pauseInstruction,
+      gap: state.settings.gap,
+      rows: state.rows.map((r) => ({ speaker: characterOf(r.speaker)?.name ?? r.speaker, say: r.say })),
+    });
+    state.rows.forEach((row, i) => (row.gapAfter = gaps[i]));
+    saveProject();
+    renderRows();
+    const changed = gaps.filter((g) => g !== null).length;
+    status.textContent =
+      `${changed}か所の後の間を変えました（ほかは既定の ${state.settings.gap}秒）。作った音はそのまま使えます。` +
+      (notes.length ? `\n${notes.map((n) => `・${n}`).join("\n")}` : "");
+  } catch (error) {
+    status.classList.add("bad");
+    status.textContent = `後の間を決められませんでした: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -680,6 +719,7 @@ function projectForExport() {
     settings: state.settings,
     request: state.request,
     manuscript: state.manuscript,
+    pauseInstruction: state.pauseInstruction ?? "",
     characters: state.characters,
     notes: state.notes,
     rows: state.rows.map(({ id, speaker, say, text, gapAfter }) => ({ id, speaker, say, text, gapAfter })),
@@ -697,6 +737,7 @@ async function onImportProject(file) {
       settings: { ...DEFAULT_SETTINGS, ...json.settings },
       request: json.request ?? "",
       manuscript: json.manuscript ?? "",
+      pauseInstruction: json.pauseInstruction ?? "",
       characters: json.characters,
       notes: json.notes ?? [],
       rows: json.rows.map((r) => ({ id: r.id ?? newId(), speaker: r.speaker, say: r.say ?? "", text: r.text ?? "", gapAfter: r.gapAfter ?? null, clip: null, error: "" })),
@@ -931,6 +972,14 @@ function bind() {
     state.settings.gap = Math.max(0, Number(e.target.value) || 0);
     renderSummary();
     saveProject();
+  });
+  $("#pause-instruction").addEventListener("input", (e) => ((state.pauseInstruction = e.target.value), saveProject()));
+  $("#suggest-pauses").addEventListener("click", onSuggestPauses);
+  $("#clear-pauses").addEventListener("click", () => {
+    state.rows.forEach((row) => (row.gapAfter = null));
+    saveProject();
+    renderRows();
+    $("#pause-status").textContent = `後の間をすべて既定（${state.settings.gap}秒）に戻しました`;
   });
   $("#play-all").addEventListener("click", onPlayAll);
   $("#download-all").addEventListener("click", onDownloadAll);

@@ -525,6 +525,7 @@ const SCRIPT_SCHEMA = {
           speaker: { type: "STRING" },
           text: { type: "STRING" },
           say: { type: "STRING" },
+          pauseAfter: { type: "NUMBER" },
         },
         required: ["speaker", "text", "say"],
       },
@@ -534,11 +535,31 @@ const SCRIPT_SCHEMA = {
   required: ["characters", "lines", "notes"],
 };
 
+/** 後の間の 決めかた（台本づくりと「AIで後の間を決める」で 共通）。 */
+function pauseRules(gap) {
+  return [
+    `後の間は「その文を読み終えてから次の文が始まるまでの無音（秒）」。ふだんは ${gap} 秒（既定）。既定のままでよい文には書かない。`,
+    "要望や指示に間のことが書いてあれば、必ずそれに従う。",
+    "書いていないときは、聞き手（学習者）が聞き取りやすいように、次の目安で決める:",
+    "- 問題・場面・話題が変わるところ（次の文が問題番号や見出しのとき）: 既定より長く（2〜3秒ほど）",
+    "- 問題番号や見出しを読んだすぐあと: 既定のまま",
+    "- 同じ会話・同じ人の話の中: 既定のまま",
+    "- 0〜10秒、0.1秒きざみ。",
+  ].join("\n");
+}
+
+/** 後の間を 0〜10秒・0.1秒きざみに そろえる（数で なければ null）。 */
+function clampPause(value) {
+  const n = Number(value);
+  if (value === null || value === undefined || value === "" || !Number.isFinite(n)) return null;
+  return Math.round(Math.min(10, Math.max(0, n)) * 10) / 10;
+}
+
 /**
- * 要望と 原稿から 台本（話す人・1文ずつの 行・声の 案）を 作って もらう。
- * 返す 行は 1文ずつ。text は 原稿の 表記、say は 読み上げに 渡す 字。
+ * 要望と 原稿から 台本（話す人・1文ずつの 行・声の 案・後の間）を 作って もらう。
+ * 返す 行は 1文ずつ。text は 原稿の 表記、say は 読み上げに 渡す 字、pauseAfter は 後の間（既定なら null）。
  */
-export async function makeScript(apiKey, model, { request, manuscript, voices }) {
+export async function makeScript(apiKey, model, { request, manuscript, voices, gap = 1.2 }) {
   const catalog = voices.map((v) => `- ${v.name}（${v.gender === "male" ? "男性" : "女性"}・${v.style}）${v.hint}`).join("\n");
   const system = [
     "あなたは音声教材・ナレーションの台本係です。原稿を、音声合成で1文ずつ読み上げるための台本に整えます。",
@@ -554,7 +575,9 @@ export async function makeScript(apiKey, model, { request, manuscript, voices })
     "   lines の speaker は characters の id を使う。",
     "8. voice は次の一覧の名前から選ぶ。性別・年齢・役割に合わせ、話し手どうしで同じ声にしない。reason に選んだ理由を短く書く。",
     catalog,
-    "9. notes には、判断したこと（読み方・話し手の割り当て・外した行など）を、日本語で短く箇条書きにする。",
+    "9. pauseAfter は、その文のあとの間（秒）。次のきまりで決める:",
+    pauseRules(gap),
+    "10. notes には、判断したこと（読み方・話し手の割り当て・外した行・間の決めかたなど）を、日本語で短く箇条書きにする。",
   ].join("\n");
   const prompt = `## 要望\n${request || "（特になし）"}\n\n## 原稿\n${manuscript}`;
   const text = await generateText(apiKey, model, { system, parts: [{ text: prompt }], schema: SCRIPT_SCHEMA });
@@ -580,11 +603,66 @@ export async function makeScript(apiKey, model, { request, manuscript, voices })
     // 1要素に 複数の 文が 入って いたら、ここで 分ける（文と 文の あいだに 間を 入れる ため）
     const says = splitSentences(line.say);
     const texts = splitSentences(line.text);
+    // 後の間は その要素の さいごの 文の あとに つける（文の 途中は 既定）
+    const pause = clampPause(line.pauseAfter);
     says.forEach((say, i) => {
-      lines.push({ speaker, say, text: texts.length === says.length ? texts[i] : says.length === 1 ? line.text : say });
+      lines.push({
+        speaker,
+        say,
+        text: texts.length === says.length ? texts[i] : says.length === 1 ? line.text : say,
+        pauseAfter: i === says.length - 1 && pause !== null && pause !== gap ? pause : null,
+      });
     });
   }
+  if (lines.length) lines[lines.length - 1].pauseAfter = null;
   return { characters, lines, notes: json.notes ?? [] };
+}
+
+const PAUSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    pauses: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: { index: { type: "INTEGER" }, seconds: { type: "NUMBER" } },
+        required: ["index", "seconds"],
+      },
+    },
+    notes: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["pauses", "notes"],
+};
+
+/**
+ * 今の 台本の 1文ごとの 後の間を 決めて もらう（文と 作った 音は 変えない）。
+ * rows: [{ speaker: 話し手の名前, say }]。返す gaps は 行と 同じ 長さで、既定の 文は null。
+ */
+export async function suggestPauses(apiKey, model, { request = "", instruction = "", gap = 1.2, rows }) {
+  if (!rows.length) throw new ApiError("台本が ありません");
+  const system = [
+    "あなたは音声教材の編集係です。1文ずつ並んだ台本の、それぞれの文のあとの間（無音の秒数）を決めます。文は変えません。",
+    pauseRules(gap),
+    "pauses には、既定と違う間にする文だけを入れる。index は台本の番号（1から）。最後の文には入れない。",
+    "notes には、間の決めかたを日本語で短く箇条書きにする。",
+  ].join("\n");
+  const listing = rows.map((row, i) => `${i + 1}. [${row.speaker}] ${row.say}`).join("\n");
+  const prompt = `## 要望\n${request || "（特になし）"}\n\n## 間についての指示\n${instruction || "（特になし）"}\n\n## 台本（番号. [話し手] 文）\n${listing}`;
+  const text = await generateText(apiKey, model, { system, parts: [{ text: prompt }], schema: PAUSE_SCHEMA });
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new ApiError(`間の 案が 形（JSON）で 返って きませんでした: ${text.slice(0, 200)}`);
+  }
+  const gaps = new Array(rows.length).fill(null);
+  for (const item of json.pauses ?? []) {
+    const index = Number(item.index) - 1;
+    const seconds = clampPause(item.seconds);
+    if (!Number.isInteger(index) || index < 0 || index >= rows.length - 1 || seconds === null) continue;
+    gaps[index] = seconds === gap ? null : seconds;
+  }
+  return { gaps, notes: json.notes ?? [] };
 }
 
 /** 音を 文字に 起こす（Live の 文字起こしが 空だった ときの 控え）。 */

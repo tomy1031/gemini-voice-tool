@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>台本から音声ツール</title>
-    <link rel="stylesheet" href="style.css?v=3" />
+    <link rel="stylesheet" href="style.css?v=4" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
-    <script type="module" src="js/app.js?v=3"></script>
+    <script type="module" src="js/app.js?v=4"></script>
   </head>
   <body>
     <header class="top">
@@ -83,6 +83,17 @@
           </label>
         </div>
         <p class="hint">速さと間は、作った音を作り直さずに変えられます（再生・書き出しのときに反映）。行ごとの「後の間」に数字を入れると、その行のあとだけ長さを変えられます。</p>
+        <div class="ai-pause">
+          <label class="field">
+            <span>後の間をAIで決める（要望と、ここに書いた指示を見て1文ずつ決めます。台本を作るときにも自動で決めています）</span>
+            <input id="pause-instruction" placeholder="例）問題と問題のあいだは3秒、番号を読んだあとは0.8秒" />
+          </label>
+          <div class="row-actions">
+            <button id="suggest-pauses" class="ghost">AIで後の間を決める</button>
+            <button id="clear-pauses" class="ghost small">後の間をすべて既定に戻す</button>
+            <span id="pause-status" class="status-text"></span>
+          </div>
+        </div>
         <div class="row-actions wrap">
           <button id="play-all" class="primary">▶ 全体を再生</button>
           <button id="download-all" class="ghost">全体をWAVで保存</button>
