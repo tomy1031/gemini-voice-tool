@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>台本から音声ツール</title>
+    <link rel="stylesheet" href="style.css?v=1" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+    <script type="module" src="js/app.js?v=1"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <h1>台本から音声ツール</h1>
+        <p class="sub">要望と原稿を貼る → AIが台本にする → 声を決めて出力。1文ずつ聞いて直せます。</p>
+      </div>
+      <button id="open-settings" class="ghost">⚙ 設定 <span id="key-badge" class="badge">APIキー未登録</span></button>
+    </header>
+
+    <main>
+      <!-- 1. 要望と原稿 -->
+      <section class="card" id="step-input">
+        <h2><span class="num">1</span>要望と原稿</h2>
+        <label class="field">
+          <span>要望（読み方・話し手の分け方・間の取り方など）</span>
+          <textarea id="request" rows="4" placeholder="例）ナレーション、A、Bに分けます。【1】、①などは数字をそのまま「いち」と読みます。女の人のせりふは女性の声にしてください。"></textarea>
+        </label>
+        <label class="field">
+          <span>原稿 <button type="button" id="load-text" class="link">テキストファイルを読み込む</button><input type="file" id="text-file" accept=".txt,.md,.csv,text/plain" hidden /></span>
+          <textarea id="manuscript" rows="10" placeholder="ここに原稿を貼ってください"></textarea>
+        </label>
+        <div class="row-actions">
+          <label class="inline">台本にするモデル
+            <input id="text-model" list="text-models" class="model" />
+          </label>
+          <button id="make-script" class="primary">台本にする</button>
+          <span id="script-status" class="status-text"></span>
+        </div>
+        <details id="notes-box" hidden>
+          <summary>AIが判断したこと</summary>
+          <ul id="notes"></ul>
+        </details>
+      </section>
+
+      <!-- 2. キャラと声 -->
+      <section class="card" id="step-voices">
+        <h2><span class="num">2</span>話し手と声</h2>
+        <p class="hint">AIが選んだ声です。変えたいときは選び直してください。▶ で見本を聞けます（APIは使いません）。</p>
+        <div id="characters" class="characters"></div>
+        <button id="add-character" class="ghost small">＋ 話し手を足す</button>
+      </section>
+
+      <!-- 3. 台本 -->
+      <section class="card" id="step-script">
+        <h2><span class="num">3</span>台本と出力</h2>
+        <div class="toolbar">
+          <button id="generate-all" class="primary">出力する</button>
+          <button id="regenerate-selected" class="ghost">選んだ行を作り直す</button>
+          <button id="stop" class="ghost" disabled>止める</button>
+          <span class="engine-note" id="engine-note"></span>
+        </div>
+        <div class="progress" id="progress" hidden><div class="bar"><div id="progress-bar"></div></div><span id="progress-text"></span></div>
+        <div class="summary" id="summary"></div>
+        <div class="rows-head">
+          <label class="inline"><input type="checkbox" id="check-all" /> すべて選ぶ</label>
+          <span class="hint">文を直すと「変更あり」になります。↻ でその行だけ作り直せます。</span>
+        </div>
+        <div id="rows" class="rows"></div>
+        <button id="add-row-end" class="ghost small">＋ 行を足す</button>
+      </section>
+
+      <!-- 4. 書き出し -->
+      <section class="card" id="step-export">
+        <h2><span class="num">4</span>速さ・間・書き出し</h2>
+        <div class="grid2">
+          <label class="field">
+            <span>速さ <output id="tempo-out">1.00</output> 倍（音の高さは変えません）</span>
+            <input type="range" id="tempo" min="0.5" max="1.5" step="0.05" value="1" />
+          </label>
+          <label class="field">
+            <span>文と文のあいだの間（秒）</span>
+            <input type="number" id="gap" min="0" max="10" step="0.1" value="1.2" />
+          </label>
+        </div>
+        <p class="hint">速さと間は、作った音を作り直さずに変えられます（再生・書き出しのときに反映）。行ごとの「後の間」に数字を入れると、その行のあとだけ長さを変えられます。</p>
+        <div class="row-actions wrap">
+          <button id="play-all" class="primary">▶ 全体を再生</button>
+          <button id="download-all" class="ghost">全体をWAVで保存</button>
+          <button id="download-zip" class="ghost">1文ずつのWAVをZIPで保存</button>
+          <span class="spacer"></span>
+          <button id="export-project" class="ghost small">台本を保存（JSON）</button>
+          <button id="import-project" class="ghost small">台本を読み込む</button>
+          <input type="file" id="project-file" accept=".json,application/json" hidden />
+          <button id="reset-project" class="ghost small danger">新しく始める</button>
+        </div>
+        <audio id="player" controls hidden></audio>
+      </section>
+    </main>
+
+    <!-- 設定 -->
+    <dialog id="settings">
+      <form method="dialog" class="settings-form">
+        <h2>設定</h2>
+        <fieldset>
+          <legend>Gemini APIキー</legend>
+          <p class="hint">このブラウザの localStorage にだけ保存します（どこにも送りません。Google への呼び出しにだけ使います）。</p>
+          <div class="key-row">
+            <input type="password" id="api-key" autocomplete="off" placeholder="AIza…" />
+            <button type="button" id="toggle-key" class="ghost small">表示</button>
+          </div>
+          <div class="row-actions">
+            <button type="button" id="save-key" class="primary small">保存</button>
+            <button type="button" id="test-key" class="ghost small">接続をためす（モデル一覧を取得）</button>
+            <button type="button" id="delete-key" class="ghost small danger">削除</button>
+          </div>
+          <p id="key-status" class="status-text"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>音声エンジン</legend>
+          <label class="radio"><input type="radio" name="engine" value="live" /> Gemini Live（1文ずつ読む。読み間違いを聞き取りで確かめて作り直す）</label>
+          <label class="radio"><input type="radio" name="engine" value="tts" /> Gemini TTS（会話をまとめて読み、間で1文ずつに切る。呼ぶ回数が少ない）</label>
+          <div class="grid2">
+            <label class="field"><span>Live のモデル</span><input id="live-model" list="live-models" class="model" /></label>
+            <label class="field"><span>TTS のモデル</span><input id="tts-model" list="tts-models" class="model" /></label>
+          </div>
+          <label class="field"><span>話し方の指示（任意。例: ゆっくり、はっきり）</span><input id="style" /></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>読み上げチェック（Live）</legend>
+          <label class="radio"><input type="checkbox" id="check" /> 読み上げを文字起こしして台本と比べ、合わなければ作り直す</label>
+          <label class="field"><span>文字起こしに使うモデル（Live が文字起こしを返さないときだけ）</span><input id="check-model" list="text-models" class="model" /></label>
+        </fieldset>
+
+        <details>
+          <summary>無料枠の目安（AI Studio の表より・2026年10月）</summary>
+          <table class="quota">
+            <tr><th>モデル</th><th>1分</th><th>1日</th></tr>
+            <tr><td>Gemini 3.8 Flash（台本）</td><td>5回</td><td>20回</td></tr>
+            <tr><td>Gemini 3.5 Flash Lite（台本・文字起こし）</td><td>15回</td><td>500回</td></tr>
+            <tr><td>Gemini 3.1 Flash Lite</td><td>15回</td><td>500回</td></tr>
+            <tr><td>Gemini 3.8 Flash TTS</td><td>3回</td><td>10回</td></tr>
+            <tr><td>Gemini 3.8 Flash Lite TTS</td><td>3回</td><td>10回</td></tr>
+          </table>
+          <p class="hint">TTS は1日10回までなので、「出力する」ではまとめて読みます（2人ずつ・最大25文で1回）。</p>
+        </details>
+
+        <div class="row-actions end">
+          <button value="close" class="primary">閉じる</button>
+        </div>
+      </form>
+    </dialog>
+
+    <datalist id="text-models"></datalist>
+    <datalist id="live-models"></datalist>
+    <datalist id="tts-models"></datalist>
+
+    <div id="toast" class="toast" hidden></div>
+  </body>
+</html>
