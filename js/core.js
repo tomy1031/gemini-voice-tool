@@ -428,7 +428,9 @@ async function callJson(apiKey, path, body, { method = "POST", timeoutMs = 12000
     const quota = response.status === 429 && /per ?day|quota/i.test(text);
     let message = text;
     try {
-      message = JSON.parse(text).error?.message ?? text;
+      // TTS（Interactions API）は [{ error }] の 形で 返す
+      const json = JSON.parse(text);
+      message = (Array.isArray(json) ? json[0] : json)?.error?.message ?? text;
     } catch {
       // JSON で ない ときは そのまま
     }

@@ -1,6 +1,6 @@
 // 画面の 動き。台本と 設定は localStorage、作った 音は IndexedDB に 置く（再読み込みしても 残る）。
-import * as core from "./core.js?v=1";
-import { VOICES } from "./voices.js?v=1";
+import * as core from "./core.js?v=2";
+import { VOICES } from "./voices.js?v=2";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY_STORE = "gvt.apiKey";
