@@ -1,6 +1,6 @@
 // 画面の 動き。台本と 設定は localStorage、作った 音は IndexedDB に 置く（再読み込みしても 残る）。
-import * as core from "./core.js?v=2";
-import { VOICES } from "./voices.js?v=2";
+import * as core from "./core.js?v=3";
+import { VOICES } from "./voices.js?v=3";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY_STORE = "gvt.apiKey";
@@ -952,6 +952,15 @@ function bind() {
     saveProject();
     renderAll();
   });
+
+  // 台本の 欄の 幅が 変わったら 文の 欄の 高さを 合わせ直す（画面の 幅が 落ち着く 前に 描くと 縦に 長く なる）
+  let lastWidth = 0;
+  new ResizeObserver(([entry]) => {
+    const width = Math.round(entry.contentRect.width);
+    if (width === lastWidth) return;
+    lastWidth = width;
+    rows.querySelectorAll("textarea.say").forEach(autosize);
+  }).observe(rows);
 
   window.addEventListener("beforeunload", (e) => {
     if (running) e.preventDefault();
